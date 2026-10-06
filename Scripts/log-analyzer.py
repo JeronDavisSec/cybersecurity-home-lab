@@ -1,69 +1,130 @@
 #!/usr/bin/env python3
-"""Analyze Linux-style authentication logs for suspicious activity."""
+"""
+SSH Authentication Log Analyzer
+
+Detects repeated failed SSH authentication attempts,
+identifies targeted accounts, and reports possible
+brute-force activity.
+"""
+
 import argparse
-import csv
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
-FAILED = re.compile(r"Failed password for (?:invalid user )?(\S+) from ([0-9.]+)")
-SUCCESS = re.compile(r"Accepted (?:password|publickey) for (\S+) from ([0-9.]+)")
+
+FAILED = re.compile(
+    r"Failed password for (?:invalid user )?(\S+) from ([0-9.]+)"
+)
+
+SUCCESS = re.compile(
+    r"Accepted (?:password|publickey) for (\S+) from ([0-9.]+)"
+)
 
 
 def analyze(path: Path, threshold: int):
     failures = Counter()
-    users = defaultdict(Counter)
+    users = {}
     successes = []
 
-    for line in path.read_text(errors="replace").splitlines():
-        match = FAILED.search(line)
-        if match:
-            user, ip = match.groups()
-            failures[ip] += 1
-            users[ip][user] += 1
-            continue
-        match = SUCCESS.search(line)
-        if match:
-            user, ip = match.groups()
-            successes.append((user, ip, line))
+    with path.open("r", encoding="utf-8", errors="ignore") as log_file:
+        for line in log_file:
+            failed_match = FAILED.search(line)
 
-    findings = []
-    for ip, count in failures.items():
+            if failed_match:
+                username, ip = failed_match.groups()
+                failures[ip] += 1
+
+                if ip not in users:
+                    users[ip] = Counter()
+
+                users[ip][username] += 1
+
+            success_match = SUCCESS.search(line)
+
+            if success_match:
+                username, ip = success_match.groups()
+                successes.append((ip, username))
+
+    print("=" * 60)
+    print("SSH SECURITY LOG ANALYSIS")
+    print("=" * 60)
+
+    alerts_found = False
+
+    for ip, count in failures.most_common():
         if count >= threshold:
-            findings.append({
-                "severity": "HIGH" if count >= threshold * 2 else "MEDIUM",
-                "type": "Repeated authentication failures",
-                "source_ip": ip,
-                "attempts": count,
-                "targeted_users": ", ".join(users[ip].keys()),
-            })
+            alerts_found = True
 
-    return findings, successes
+            targeted_accounts = ", ".join(
+                sorted(users[ip].keys())
+            )
+
+            successful_login = [
+                username
+                for source_ip, username in successes
+                if source_ip == ip
+            ]
+
+            if successful_login:
+                severity = "CRITICAL"
+                success_status = "YES"
+            else:
+                severity = "HIGH"
+                success_status = "NO"
+
+            print()
+            print("=" * 60)
+            print("SECURITY ALERT")
+            print("=" * 60)
+            print(f"Severity: {severity}")
+            print("Detection: SSH Brute Force")
+            print(f"Source IP: {ip}")
+            print(f"Failed Attempts: {count}")
+            print(f"Targeted Accounts: {targeted_accounts}")
+            print(f"Successful Login: {success_status}")
+            print("MITRE ATT&CK: T1110 - Brute Force")
+            print("=" * 60)
+
+            if successful_login:
+                print(
+                    f"[!] Successful authentication detected "
+                    f"for: {', '.join(successful_login)}"
+                )
+
+    if not alerts_found:
+        print()
+        print("[OK] No brute-force activity detected.")
+        print(f"Threshold: {threshold} failed attempts")
+
+    print()
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("logfile", type=Path)
-    parser.add_argument("--threshold", type=int, default=5)
-    parser.add_argument("--csv", type=Path, help="Optional CSV output file")
+    parser = argparse.ArgumentParser(
+        description="Analyze SSH authentication logs for suspicious activity."
+    )
+
+    parser.add_argument(
+        "logfile",
+        type=Path,
+        help="Path to authentication log file"
+    )
+
+    parser.add_argument(
+        "--threshold",
+        type=int,
+        default=5,
+        help="Failed attempts required to trigger an alert"
+    )
+
     args = parser.parse_args()
 
-    findings, successes = analyze(args.logfile, args.threshold)
-    print(f"Analyzed: {args.logfile}")
-    print(f"Findings: {len(findings)}")
-    for finding in findings:
-        print(f"[{finding['severity']}] {finding['source_ip']} - "
-              f"{finding['attempts']} failures targeting {finding['targeted_users']}")
+    if not args.logfile.exists():
+        print(f"[ERROR] Log file not found: {args.logfile}")
+        return
 
-    if successes:
-        print(f"Successful authentications observed: {len(successes)}")
-
-    if args.csv:
-        with args.csv.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=["severity", "type", "source_ip", "attempts", "targeted_users"])
-            writer.writeheader()
-            writer.writerows(findings)
-        print(f"Wrote findings to {args.csv}")
+    analyze(args.logfile, args.threshold)
 
 
 if __name__ == "__main__":
