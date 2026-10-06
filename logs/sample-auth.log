@@ -9,3 +9,4 @@ Oct  5 08:12:20 labhost sshd[1016]: Failed password for root from 203.0.113.50 p
 Oct  5 08:13:01 labhost sshd[1017]: Accepted password for analyst from 192.168.1.25 port 51008 ssh2
 Oct  5 09:15:20 labhost sshd[1020]: Failed password for testuser from 198.51.100.77 port 43001 ssh2
 Oct  5 09:15:29 labhost sshd[1021]: Failed password for testuser from 198.51.100.77 port 43002 ssh2
+Oct 05 12:35:10 server sshd[2001]: Accepted password for admin from 203.0.113.50 port 22 ssh2
