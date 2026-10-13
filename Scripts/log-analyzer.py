@@ -11,7 +11,9 @@ import argparse
 import re
 from collections import Counter
 from pathlib import Path
-
+from contextlib import redirect_stdout
+from io import StringIO
+from datetime import datetime
 
 FAILED = re.compile(
     r"Failed password for (?:invalid user )?(\S+) from ([0-9.]+)"
@@ -22,7 +24,7 @@ SUCCESS = re.compile(
 )
 
 
-def analyze(path: Path, threshold: int):
+def analyze(path: Path, threshold: int, output: Path = None):
     failures = Counter()
     users = {}
     successes = []
@@ -44,7 +46,8 @@ def analyze(path: Path, threshold: int):
 
             if success_match:
                 username, ip = success_match.groups()
-                successes.append((ip, username))
+                timestamp = line[:15]
+                successes.append((ip, username, timestamp))
 
     print("=" * 60)
     print("SSH SECURITY LOG ANALYSIS")
@@ -56,13 +59,11 @@ def analyze(path: Path, threshold: int):
         if count >= threshold:
             alerts_found = True
 
-            targeted_accounts = ", ".join(
-                sorted(users[ip].keys())
-            )
+            targeted_accounts = ", ".join(sorted(users[ip].keys()))
 
             successful_login = [
                 username
-                for source_ip, username in successes
+                for source_ip, username, timestamp in successes
                 if source_ip == ip
             ]
 
@@ -88,7 +89,7 @@ def analyze(path: Path, threshold: int):
 
             if successful_login:
                 print(
-                    f"[!] Successful authentication detected "
+                    "[!] Successful authentication detected "
                     f"for: {', '.join(successful_login)}"
                 )
 
@@ -97,34 +98,44 @@ def analyze(path: Path, threshold: int):
         print("[OK] No brute-force activity detected.")
         print(f"Threshold: {threshold} failed attempts")
 
-    print()
-
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Analyze SSH authentication logs for suspicious activity."
+        description="Analyze SSH authentication logs for brute-force activity."
     )
-
-    parser.add_argument(
-        "logfile",
-        type=Path,
-        help="Path to authentication log file"
-    )
-
+    parser.add_argument("logfile", type=Path, help="Path to the authentication log")
     parser.add_argument(
         "--threshold",
         type=int,
         default=5,
-        help="Failed attempts required to trigger an alert"
+        help="Failed attempts required to trigger an alert (default: 5)",
     )
-
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Optional path for saving the analysis report",
+    )
     args = parser.parse_args()
 
-    if not args.logfile.exists():
-        print(f"[ERROR] Log file not found: {args.logfile}")
-        return
+    if not args.logfile.is_file():
+        parser.error(f"Log file not found: {args.logfile}")
 
-    analyze(args.logfile, args.threshold)
+    if args.threshold < 1:
+        parser.error("Threshold must be at least 1")
+
+    if args.output:
+        buffer = StringIO()
+
+        with redirect_stdout(buffer):
+            analyze(args.logfile, args.threshold)
+
+        report = buffer.getvalue()
+        print(report, end="")
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report, encoding="utf-8")
+        print(f"\nReport saved to: {args.output}")
+    else:
+        analyze(args.logfile, args.threshold)
 
 
 if __name__ == "__main__":
