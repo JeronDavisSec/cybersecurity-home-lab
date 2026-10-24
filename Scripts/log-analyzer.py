@@ -23,11 +23,22 @@ SUCCESS = re.compile(
     r"Accepted (?:password|publickey) for (\S+) from ([0-9.]+)"
 )
 
+    
+def parse_timestamp(line, year):
+    timestamp = line[:15]
+    return datetime.strptime(
+        f"{timestamp} {year}", 
+        "%b %d %H:%M:%S %Y"
+    )
 
 def analyze(path: Path, threshold: int, output: Path = None):
     failures = Counter()
+    failure_times = {}
     users = {}
     successes = []
+
+    current_year = datetime.now().year
+    previous_timestamp = None
 
     with path.open("r", encoding="utf-8", errors="ignore") as log_file:
         for line in log_file:
@@ -36,6 +47,15 @@ def analyze(path: Path, threshold: int, output: Path = None):
             if failed_match:
                 username, ip = failed_match.groups()
                 failures[ip] += 1
+                timestamp = parse_timestamp(line, current_year)
+
+                if previous_timestamp is not None:
+                    if timestamp.month < previous_timestamp.month:
+                        current_year +=1
+                        timestamp =parse_timestamp(line, current_year)
+                
+                previous_timestamp = timestamp 
+                failure_times.setdefault(ip, []).append(timestamp)
 
                 if ip not in users:
                     users[ip] = Counter()
@@ -46,7 +66,14 @@ def analyze(path: Path, threshold: int, output: Path = None):
 
             if success_match:
                 username, ip = success_match.groups()
-                timestamp = line[:15]
+                timestamp = parse_timestamp(line, current_year)
+
+                if previous_timestamp is not None:
+                    if timestamp.month < previous_timestamp.month:
+                        current_year += 1
+                        timestamp = parse_timestamp(line, current_year)
+
+                previous_timestamp = timestamp
                 successes.append((ip, username, timestamp))
 
     print("=" * 60)
@@ -61,10 +88,12 @@ def analyze(path: Path, threshold: int, output: Path = None):
 
             targeted_accounts = ", ".join(sorted(users[ip].keys()))
 
+            latest_failure = max(failure_times[ip])
+
             successful_login = [
                 username
                 for source_ip, username, timestamp in successes
-                if source_ip == ip
+                if source_ip == ip and timestamp > latest_failure
             ]
 
             if successful_login:
